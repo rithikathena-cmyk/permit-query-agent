@@ -15,12 +15,19 @@ connection, so importing this module never fails just because the database is
 unreachable — that surfaces later, at query time, where it can be handled.
 """
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-load_dotenv()
+# Load .env from the project root explicitly, not from the current working
+# directory. ``load_dotenv()`` with no argument searches upward from the cwd, so
+# launching Streamlit (or anything else) from a different directory would leave
+# DB_* unset and the connection would silently fall back to bad defaults
+# ("Access denied ... using password: NO"). Anchoring to this file's location
+# makes config load regardless of where the process is started.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def _database_url() -> str:

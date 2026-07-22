@@ -49,4 +49,35 @@ EXAMPLES = [
             "LIMIT 100"
         ),
     },
+    {
+        # There is no inspection-date column; "Inspection Scheduled" is a
+        # status. Bridge the question to the status the schema actually stores.
+        "question": "Is permit PERM-2026-000005's inspection scheduled?",
+        "sql": (
+            "SELECT p.application_number, ps.status "
+            "FROM permits p "
+            "JOIN permit_statuses ps ON ps.id = p.status_id "
+            "WHERE p.application_number = 'PERM-2026-000005' "
+            "LIMIT 100"
+        ),
+    },
+    {
+        # Single-permit lookup -> the labelled status card. Pull every card
+        # field in one query and LEFT JOIN pending documents (received = 0) so
+        # a permit with nothing outstanding still returns its row.
+        "question": "What's the status of permit PERM-2026-000012?",
+        "sql": (
+            "SELECT p.application_number, ps.status, "
+            "pt.name AS permit_type, p.submitted_date, "
+            "p.estimated_completion_date, o.name AS officer, o.department, "
+            "d.doc_name AS pending_document "
+            "FROM permits p "
+            "JOIN permit_statuses ps ON ps.id = p.status_id "
+            "JOIN permit_types pt ON pt.id = p.permit_type_id "
+            "JOIN officers o ON o.id = p.officer_id "
+            "LEFT JOIN permit_documents d "
+            "ON d.permit_id = p.id AND d.received = 0 "
+            "WHERE p.application_number = 'PERM-2026-000012'"
+        ),
+    },
 ]

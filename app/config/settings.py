@@ -1,9 +1,12 @@
 """Application settings loaded from the environment (.env)."""
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Anchor .env loading to the project root so config loads no matter which
+# directory the process (e.g. `streamlit run ui/app.py`) is started from.
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 class Settings:

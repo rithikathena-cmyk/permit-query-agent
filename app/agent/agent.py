@@ -84,6 +84,30 @@ def _schema_text() -> str:
     return "\n".join(lines)
 
 
+def _permit_id_hint() -> str:
+    """Live application-number range, so the agent's suggestions stay in-bounds.
+
+    Numbers are zero-padded to a fixed width, so lexical MIN/MAX equal the
+    numeric first/last id. Injected into the prompt (below) so the model never
+    proposes a "corrected" id that is itself out of range.
+    """
+    from app.mcp import tools
+
+    resp = tools.execute_query(
+        "SELECT MIN(application_number) AS lo, MAX(application_number) AS hi, "
+        "COUNT(*) AS n FROM permits"
+    )
+    data = resp.get("data") if resp.get("success") else None
+    if not data:
+        return ""
+    row = data[0]
+    return (
+        f"Application numbers in the database run from {row['lo']} to "
+        f"{row['hi']} ({row['n']} permits total). An id outside this range "
+        f"does not exist — do not suggest one."
+    )
+
+
 def _base_rules() -> tuple[str, str]:
     """The static instruction text and rendered few-shot examples."""
     from app.agent.examples import EXAMPLES
@@ -95,26 +119,51 @@ def _base_rules() -> tuple[str, str]:
     return base, examples
 
 
-def _cli_system(schema_text: str) -> str:
+def _cli_system(schema_text: str, id_hint: str = "") -> str:
     """System prompt for the CLI path: the model calls the query_permits tool."""
     base, examples = _base_rules()
+    id_line = f"{id_hint}\n\n" if id_hint else ""
     return (
         f"{base}\n\n"
         f"Schema (authoritative — do NOT call any schema tool; use these "
         f"names):\n{schema_text}\n\n"
+        f"{id_line}"
         "Answer by calling the `query_permits` tool ONCE with an explicit "
-        "SELECT so the SQL is visible; do not use the count_* tools. Then give "
-        "a short, plain-English answer.\n\n"
+        "SELECT so the SQL is visible; do not use the count_* tools. Always "
+        "run this lookup — even for a single permit id, and even if the id "
+        "looks malformed: run the SELECT and answer from the actual result "
+        "('no matching record' when it returns nothing) rather than refusing "
+        "on the format alone. Then give a short, plain-English answer: one or "
+        "two sentences. Do NOT restate the SQL and do NOT list or narrate "
+        "individual rows — the UI shows the query and the full results table "
+        "separately. If the result is a single number, lead with it; "
+        "otherwise state what was found and how many rows matched.\n\n"
+        "SPECIAL CASE — a lookup of ONE specific permit by application number: "
+        "select its status, permit type, submitted_date, "
+        "estimated_completion_date, the officer name and department, and LEFT "
+        "JOIN permit_documents (received = 0) for pending documents. Then write "
+        "a SHORT, friendly summary — two to four sentences of plain prose, NOT "
+        "a labelled card and NOT a bulleted list. Weave in the permit type and "
+        "current status, then whatever matters most: any pending documents (or "
+        "that all documents are received), the assigned officer/department, and "
+        "the estimated completion date. End with a one-line next step derived "
+        "from the status: Pending -> awaiting initial review; Under Review -> "
+        "upload any pending documents to continue; Inspection Scheduled -> "
+        "inspection booked, no action needed; Approved -> approved, no further "
+        "action; Rejected -> contact the office. The full field-by-field detail "
+        "is already visible in the results table, so keep the prose tight.\n\n"
         f"Examples:\n{examples}"
     )
 
 
-def _api_system(schema_text: str) -> str:
+def _api_system(schema_text: str, id_hint: str = "") -> str:
     """System prompt for the API path: the model returns raw SQL (no tools)."""
     base, examples = _base_rules()
+    id_line = f"{id_hint}\n\n" if id_hint else ""
     return (
         f"{base}\n\n"
         f"Schema (authoritative — use ONLY these names):\n{schema_text}\n\n"
+        f"{id_line}"
         "Output ONLY one MySQL SELECT statement — no prose, no markdown "
         "fences.\n\n"
         f"Examples:\n{examples}"
@@ -138,14 +187,16 @@ class PermitAgent:
         self.model = model
         self.timeout_s = timeout_s
         self._cli = shutil.which("claude")
-        # Fetch the schema once and bake it into the (cacheable) system prompt.
+        # Fetch the schema + id range once and bake them into the (cacheable)
+        # system prompt.
         schema = _schema_text()
+        id_hint = _permit_id_hint()
         if self._cli:
             self.mode = "cli"
-            self._system = _cli_system(schema)
+            self._system = _cli_system(schema, id_hint)
         elif os.getenv("ANTHROPIC_API_KEY"):
             self.mode = "api"
-            self._system = _api_system(schema)
+            self._system = _api_system(schema, id_hint)
         else:
             self.mode = "none"
             self._system = ""
@@ -185,6 +236,7 @@ class PermitAgent:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
+                errors="replace",   # never crash on a stray non-UTF-8 byte
                 timeout=self.timeout_s,
             )
         except subprocess.TimeoutExpired:

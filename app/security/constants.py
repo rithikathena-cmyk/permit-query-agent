@@ -4,6 +4,7 @@ ALLOWED_TABLES = {
     "permit_statuses",
     "cities",
     "officers",
+    "permit_documents",
     "permit_details"
 }
 

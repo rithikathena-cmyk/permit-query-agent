@@ -33,6 +33,10 @@ class Permit(Base):
 
     approved_date: Mapped[date | None] = mapped_column(Date)
 
+    # Projected date the review/inspection is expected to finish. Null for
+    # permits with no meaningful estimate (e.g. Rejected).
+    estimated_completion_date: Mapped[date | None] = mapped_column(Date)
+
     estimated_cost: Mapped[float] = mapped_column(
         Numeric(12, 2)
     )
@@ -82,4 +86,10 @@ class Permit(Base):
     officer = relationship(
         "Officer",
         back_populates="permits",
+    )
+
+    documents = relationship(
+        "PermitDocument",
+        back_populates="permit",
+        cascade="all, delete-orphan",
     )

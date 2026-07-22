@@ -11,7 +11,14 @@ from datetime import date, timedelta
 from sqlalchemy import delete
 
 from app.database.connection import SessionLocal
-from app.models import City, Officer, Permit, PermitStatus, PermitType
+from app.models import (
+    City,
+    Officer,
+    Permit,
+    PermitDocument,
+    PermitStatus,
+    PermitType,
+)
 
 random.seed(42)
 
@@ -102,8 +109,38 @@ DEPARTMENTS = [
     "Inspection",
 ]
 
+# Document requirements per permit type. Every permit gets its type's list;
+# each document is then marked received or still-pending (see seed_documents).
+COMMON_DOCS = ["Proof of property ownership", "Site plan", "Government-issued ID"]
+DOCS_BY_TYPE = {
+    "Building": COMMON_DOCS + ["Structural engineering drawings",
+                               "Architectural plans"],
+    "Electrical": COMMON_DOCS + ["Electrical load calculations",
+                                 "Wiring diagram"],
+    "Mechanical": COMMON_DOCS + ["Mechanical system specifications"],
+    "Plumbing": COMMON_DOCS + ["Plumbing layout diagram"],
+    "Roofing": COMMON_DOCS + ["Roofing material specifications"],
+    "Demolition": COMMON_DOCS + ["Demolition safety plan",
+                                 "Utility disconnection notice"],
+    "HVAC": COMMON_DOCS + ["HVAC load calculations"],
+    "Fire Safety": COMMON_DOCS + ["Fire suppression system plan",
+                                  "Occupancy load report"],
+}
+
+# Probability a given document has already been received, by permit status.
+# Approved / Inspection Scheduled permits have everything on file; Pending ones
+# are still missing the most.
+RECEIVED_PROB = {
+    "Approved": 1.0,
+    "Inspection Scheduled": 1.0,
+    "Under Review": 0.7,
+    "Pending": 0.4,
+    "Rejected": 0.6,
+}
+
 def clear_tables(session):
     """Remove existing rows, children first to respect FK constraints."""
+    session.execute(delete(PermitDocument))
     session.execute(delete(Permit))
     session.execute(delete(PermitType))
     session.execute(delete(PermitStatus))
@@ -168,6 +205,16 @@ def seed_permits(session, permit_types, statuses, cities, officers):
             if approved > today:
                 approved = today
 
+        # Estimated completion: the approval date once approved, nothing for a
+        # rejected permit, otherwise a projected date still in the future
+        # (relative to `today`) so an in-progress permit never reads as overdue.
+        if status.status == "Approved":
+            completion = approved
+        elif status.status == "Rejected":
+            completion = None
+        else:
+            completion = today + timedelta(days=random.randint(7, 90))
+
         applicant = f"{random.choice(FIRST_NAMES)} {random.choice(LAST_NAMES)}"
         cost = round(random.uniform(500, 150_000), 2)
 
@@ -177,6 +224,7 @@ def seed_permits(session, permit_types, statuses, cities, officers):
                 applicant_name=applicant,
                 submitted_date=submitted,
                 approved_date=approved,
+                estimated_completion_date=completion,
                 estimated_cost=cost,
                 permit_type=ptype,
                 status=status,
@@ -190,6 +238,30 @@ def seed_permits(session, permit_types, statuses, cities, officers):
     return num_permits
 
 
+def seed_documents(session):
+    """Attach document requirements to every permit.
+
+    Each permit gets the document list for its type; each document is marked
+    received or pending based on the permit's status (see RECEIVED_PROB), so
+    "pending documents" are real rows, not invented at answer time.
+    """
+    permits = session.query(Permit).all()
+    docs = []
+    for permit in permits:
+        prob = RECEIVED_PROB.get(permit.status.status, 0.5)
+        for name in DOCS_BY_TYPE.get(permit.permit_type.name, COMMON_DOCS):
+            docs.append(
+                PermitDocument(
+                    permit_id=permit.id,
+                    doc_name=name,
+                    received=random.random() < prob,
+                )
+            )
+    session.add_all(docs)
+    session.commit()
+    return len(docs)
+
+
 def main():
     session = SessionLocal()
     try:
@@ -198,12 +270,14 @@ def main():
         num_permits = seed_permits(
             session, permit_types, statuses, cities, officers
         )
+        num_docs = seed_documents(session)
         print("Seed complete:")
         print(f"  permit_types    : {len(permit_types)}")
         print(f"  permit_statuses : {len(statuses)}")
         print(f"  cities          : {len(cities)}")
         print(f"  officers        : {len(officers)}")
         print(f"  permits         : {num_permits}")
+        print(f"  permit_documents: {num_docs}")
     finally:
         session.close()
 
