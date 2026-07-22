@@ -353,26 +353,12 @@ def render_chips(caption: str, items: list, per_row: int = 3) -> None:
                           on_click=goto_ask, args=(question,))
 
 
-# Quick concrete demos + the vaguer "citizen" questions (no ID) that show the
-# agent gracefully asking which permit.
+# Quick concrete demos.
 QUICK_CHIPS = [
     ("📋 Status of PERM-2026-000052",
      "What's the status of permit PERM-2026-000052?"),
     ("⏳ How many are pending?", "How many permits are pending?"),
     ("🏙️ Cities with most permits", "Which cities have the most permits?"),
-]
-CITIZEN_CHIPS = [
-    ("📍 Where's my application?",
-     "I applied for a permit a few weeks ago. Can you check where it is in "
-     "the process?"),
-    ("⏱️ Anything delaying it?",
-     "I'd like to know if there's anything delaying my application."),
-    ("💬 Explain my status simply",
-     "Can you explain my permit status in simple terms?"),
-    ("➡️ What should I do next?",
-     "What should I do next to complete my application?"),
-    ("📄 Docs needed for approval?",
-     "Is there anything I need to submit before my permit can be approved?"),
 ]
 
 
@@ -464,7 +450,6 @@ def page_ask_ai() -> None:
 
     # Quick-start chips
     render_chips("Try a quick query", QUICK_CHIPS, per_row=3)
-    render_chips("Or ask like a citizen", CITIZEN_CHIPS, per_row=3)
 
     # Auto-run a question routed from a suggestion, else run on submit.
     if st.session_state.pop("autorun", False):
