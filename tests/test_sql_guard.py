@@ -76,6 +76,35 @@ def test_subquery_disallowed_table_blocked():
         SQLGuard.validate(sql)
 
 
+def test_comma_join_disallowed_table_blocked():
+    # The classic gap: a second table introduced by a comma, not FROM/JOIN.
+    sql = "SELECT * FROM permits, information_schema.tables"
+    with pytest.raises(SQLValidationError):
+        SQLGuard.validate(sql)
+
+
+def test_comma_join_allowed_tables_pass():
+    sql = "SELECT * FROM permits p, officers o WHERE p.officer_id = o.id"
+    out = SQLGuard.validate(sql)
+    assert "LIMIT 100" in out
+
+
+def test_schema_qualified_table_blocked():
+    with pytest.raises(SQLValidationError, match="Cross-schema"):
+        SQLGuard.validate("SELECT * FROM mysql.user")
+
+
+def test_backtick_cross_schema_blocked():
+    with pytest.raises(SQLValidationError):
+        SQLGuard.validate("SELECT * FROM `permits`, `mysql`.`user`")
+
+
+def test_from_subselect_allowed():
+    sql = "SELECT x FROM (SELECT id AS x FROM permits) sub"
+    out = SQLGuard.validate(sql)
+    assert "LIMIT 100" in out
+
+
 @pytest.mark.parametrize(
     "sql",
     [

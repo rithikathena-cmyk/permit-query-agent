@@ -10,7 +10,9 @@ from datetime import date, timedelta
 
 from sqlalchemy import delete
 
-from app.database.connection import SessionLocal
+from sqlalchemy.orm import sessionmaker
+
+from app.database.connection import admin_engine
 from app.models import (
     City,
     Officer,
@@ -263,7 +265,9 @@ def seed_documents(session):
 
 
 def main():
-    session = SessionLocal()
+    # Seeding writes rows, so it uses admin credentials — the app's read-only
+    # user cannot INSERT/DELETE.
+    session = sessionmaker(bind=admin_engine())()
     try:
         clear_tables(session)
         permit_types, statuses, cities, officers = seed_reference(session)

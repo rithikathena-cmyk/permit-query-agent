@@ -56,3 +56,24 @@ SessionLocal = sessionmaker(
     autoflush=False,
     autocommit=False,
 )
+
+
+def admin_engine():
+    """Engine using elevated (write/DDL) credentials for setup scripts.
+
+    The application and MCP server connect through ``engine`` as the
+    least-privilege read-only user (``DB_USER``). Schema creation, seeding, and
+    user management need write/DDL rights, so those scripts build a separate
+    engine from ``DB_ADMIN_USER`` / ``DB_ADMIN_PASSWORD`` (falling back to the
+    app credentials when no admin override is configured).
+    """
+    user = os.getenv("DB_ADMIN_USER") or os.getenv("DB_USER", "root")
+    password = os.getenv("DB_ADMIN_PASSWORD") or os.getenv("DB_PASSWORD", "")
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "3306")
+    name = os.getenv("DB_NAME", "permit_system")
+    url = (
+        f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
+        "?charset=utf8mb4"
+    )
+    return create_engine(url, pool_pre_ping=True)
