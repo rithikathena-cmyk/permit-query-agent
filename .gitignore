@@ -1,0 +1,17 @@
+# Environment / secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# SQLite (legacy)
+*.db
+
+# Logs
+logs/
+
+# Test / tooling caches
+.pytest_cache/

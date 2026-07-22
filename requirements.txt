@@ -1,0 +1,11 @@
+fastmcp
+streamlit
+sqlalchemy
+pymysql
+python-dotenv
+pydantic
+rich
+tabulate
+pytest
+black
+isort

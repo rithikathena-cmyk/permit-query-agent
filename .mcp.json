@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "permit-db": {
+      "command": "python",
+      "args": [
+        "-m",
+        "app.mcp.server"
+      ]
+    }
+  }
+}
