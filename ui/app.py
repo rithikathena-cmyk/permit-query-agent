@@ -16,7 +16,7 @@ The UI never touches the database or repository directly.
 """
 import csv
 import io
-import shutil
+import os
 import sys
 from pathlib import Path
 
@@ -26,6 +26,17 @@ import streamlit as st
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+# Bridge Streamlit secrets -> environment BEFORE importing the backend, so the
+# database layer (which reads DB_* / DATABASE_URL from os.environ) and the API
+# agent (ANTHROPIC_API_KEY) pick up config when deployed to Streamlit Cloud.
+# Local runs have no secrets file, which is fine — the .env is used instead.
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:  # noqa: BLE001 — no secrets.toml locally is expected
+    pass
 
 import data  # noqa: E402  (ui/data.py — deterministic reads)
 from app.agent.agent import PermitAgent  # noqa: E402
@@ -121,11 +132,16 @@ with st.sidebar:
     st.divider()
     st.caption("**System status**")
     db_ok = data.db_connected()
-    claude_ok = shutil.which("claude") is not None
+    agent_mode = get_agent().mode
+    agent_label = {
+        "cli": "Agent: Claude Code (CLI)",
+        "api": "Agent: Anthropic API",
+        "none": "Agent: not configured",
+    }[agent_mode]
     mcp_ok = (_ROOT / ".mcp.json").exists()
     st.write(f"{'✅' if db_ok else '❌'} Database (MySQL)")
     st.write(f"{'✅' if mcp_ok else '❌'} MCP server")
-    st.write(f"{'✅' if claude_ok else '❌'} Claude Code")
+    st.write(f"{'✅' if agent_mode != 'none' else '❌'} {agent_label}")
 
     st.divider()
     dark = st.toggle("🌙 Dark mode", value=False)
