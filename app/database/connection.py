@@ -15,6 +15,7 @@ connection, so importing this module never fails just because the database is
 unreachable — that surfaces later, at query time, where it can be handled.
 """
 import os
+import ssl
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -39,7 +40,34 @@ def _database_url() -> str:
     name = os.getenv("DB_NAME", "permits")
     user = os.getenv("DB_USER", "root")
     password = os.getenv("DB_PASSWORD", "")
-    return f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
+    return (
+        f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
+        "?charset=utf8mb4"
+    )
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _connect_args() -> dict:
+    """TLS options for pymysql, enabled for a hosted database via ``DB_SSL``.
+
+    Local development (``DB_SSL`` unset) connects without TLS, unchanged. On a
+    hosted MySQL, set ``DB_SSL=true`` to require an encrypted connection. The
+    server certificate is verified against the system CAs (or ``DB_SSL_CA`` if
+    the provider ships its own bundle); set ``DB_SSL_VERIFY=false`` only for a
+    provider that uses a self-signed certificate.
+    """
+    if not _truthy(os.getenv("DB_SSL")):
+        return {}
+    if _truthy(os.getenv("DB_SSL_VERIFY", "true")):
+        context = ssl.create_default_context(cafile=os.getenv("DB_SSL_CA"))
+    else:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return {"ssl": context}
 
 
 DATABASE_URL = _database_url()
@@ -49,6 +77,7 @@ engine = create_engine(
     echo=False,
     pool_pre_ping=True,
     pool_recycle=3600,
+    connect_args=_connect_args(),
 )
 
 SessionLocal = sessionmaker(
@@ -76,4 +105,6 @@ def admin_engine():
         f"mysql+pymysql://{user}:{password}@{host}:{port}/{name}"
         "?charset=utf8mb4"
     )
-    return create_engine(url, pool_pre_ping=True)
+    return create_engine(
+        url, pool_pre_ping=True, connect_args=_connect_args()
+    )

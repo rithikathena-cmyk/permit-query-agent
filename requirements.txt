@@ -3,6 +3,7 @@ streamlit
 anthropic
 sqlalchemy
 pymysql
+cryptography
 python-dotenv
 pydantic
 rich
