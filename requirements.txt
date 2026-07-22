@@ -1,5 +1,6 @@
 fastmcp
 streamlit
+anthropic
 sqlalchemy
 pymysql
 python-dotenv
