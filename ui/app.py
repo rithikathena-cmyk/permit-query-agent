@@ -52,6 +52,33 @@ st.set_page_config(
 
 
 # --------------------------------------------------------------------------- #
+# Optional one-time seeding for a fresh hosted deployment (SEED_ON_START=true).
+#
+# Runs at most once per process (st.cache_resource) and only populates an EMPTY
+# database — an already-seeded DB is left untouched, so it is safe to leave on.
+# Best-effort: any failure (e.g. a read-only connection) is surfaced as a
+# warning and the app keeps running.
+# --------------------------------------------------------------------------- #
+@st.cache_resource(show_spinner=False)
+def _seed_on_start_once() -> str:
+    if os.getenv("SEED_ON_START", "").strip().lower() not in (
+        "1", "true", "yes", "on"
+    ):
+        return "disabled"
+    try:
+        from scripts.seed_data import seed_if_empty
+
+        with st.spinner("Preparing sample data (first run only)…"):
+            return "seeded" if seed_if_empty() else "already-populated"
+    except Exception as exc:  # noqa: BLE001 — never block the app on seeding
+        st.warning(f"SEED_ON_START skipped: {exc}")
+        return "error"
+
+
+_seed_on_start_once()
+
+
+# --------------------------------------------------------------------------- #
 # Theme — a single CSS-variable stylesheet, re-applied every run.
 #
 # The old toggle only injected a background override when dark was on, leaving

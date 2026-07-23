@@ -264,6 +264,30 @@ def seed_documents(session):
     return len(docs)
 
 
+def seed_if_empty() -> bool:
+    """Seed only when the database has no permits yet. Returns True if it did.
+
+    Safe to call on startup (see ``SEED_ON_START``): it first ensures the
+    tables exist, then leaves a populated database completely untouched — it
+    never clears existing rows. Only a fresh/empty database is seeded. Needs
+    write access (admin credentials), so it is a no-op + logged warning if the
+    connection is read-only.
+    """
+    from app.database.base import Base
+    import app.models  # noqa: F401 — register models on the metadata
+
+    engine = admin_engine()
+    Base.metadata.create_all(bind=engine)  # no-op if tables already exist
+    session = sessionmaker(bind=engine)()
+    try:
+        if session.query(Permit).first() is not None:
+            return False
+    finally:
+        session.close()
+    main()
+    return True
+
+
 def main():
     # Seeding writes rows, so it uses admin credentials — the app's read-only
     # user cannot INSERT/DELETE.

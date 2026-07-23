@@ -44,8 +44,9 @@ _ALLOWED_TOOLS = [_QUERY_TOOL]
 DEFAULT_MODEL = "sonnet"
 DEFAULT_TIMEOUT_S = 180
 
-# Model id for the Anthropic-API path (cloud / no-CLI mode).
-API_MODEL = "claude-sonnet-5"
+# Model id for the Anthropic-API path (cloud / no-CLI mode). Overridable via
+# the CLAUDE_MODEL env var / Streamlit secret (e.g. "claude-opus-4-8").
+API_MODEL = os.getenv("CLAUDE_MODEL") or "claude-sonnet-5"
 # Strip ```sql fences the model may add in API mode.
 _FENCE = re.compile(r"```(?:sql)?|```", re.IGNORECASE)
 

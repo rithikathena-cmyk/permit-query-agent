@@ -145,6 +145,16 @@ def admin_engine():
     app credentials when no admin override is configured). On Aiven the admin
     user is ``avnadmin``.
     """
+    # A hosted service (e.g. Streamlit Cloud) typically exposes a single
+    # DATABASE_URL and no separate DB_* parts. When no explicit admin override
+    # is given, reuse that URL so admin ops (init/seed) have a valid connection
+    # rather than falling back to a broken localhost default.
+    raw = os.getenv("DATABASE_URL")
+    if raw and not os.getenv("DB_ADMIN_USER"):
+        return create_engine(
+            _normalize_url(raw), pool_pre_ping=True,
+            connect_args=_connect_args(),
+        )
     user = os.getenv("DB_ADMIN_USER") or os.getenv("DB_USER", "root")
     password = os.getenv("DB_ADMIN_PASSWORD") or os.getenv("DB_PASSWORD", "")
     host = os.getenv("DB_HOST", "localhost")
