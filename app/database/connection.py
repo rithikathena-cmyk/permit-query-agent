@@ -1,14 +1,17 @@
 """Database engine/session setup.
 
-Configuration is read from the environment so the same code runs locally
-(from ``.env``) and on a host like Streamlit Cloud (where the UI bridges
-``st.secrets`` into the environment before this module is imported).
+Configuration is read from the environment (``.env``) so the connection
+details never live in code. The individual ``DB_HOST`` / ``DB_PORT`` /
+``DB_NAME`` / ``DB_USER`` / ``DB_PASSWORD`` variables are assembled into a
+SQLAlchemy URL, each with a sane default so the URL is always valid (no
+``None:None`` parse crashes when nothing is set).
 
-Two ways to configure, in priority order:
-  1. ``DATABASE_URL`` — a full SQLAlchemy URL (easiest for hosted MySQL).
-  2. ``DB_HOST`` / ``DB_PORT`` / ``DB_NAME`` / ``DB_USER`` / ``DB_PASSWORD`` —
-     assembled into a URL, each with a sane default so the URL is always
-     valid (no more ``None:None`` parse crashes when nothing is set).
+Two supported targets:
+  * Local MySQL   — ``DB_HOST=localhost``, ``DB_PORT=3306``, ``DB_SSL`` unset
+    (plaintext connection).
+  * Aiven for MySQL — the service host, its assigned port, and ``DB_SSL=true``.
+    Aiven requires TLS and ships its own CA; point ``DB_SSL_CA`` at the
+    downloaded ``ca.pem`` so the server certificate is verified.
 
 ``create_engine`` only parses the URL and sets up the pool; it does not open a
 connection, so importing this module never fails just because the database is
@@ -32,12 +35,9 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def _database_url() -> str:
-    url = os.getenv("DATABASE_URL")
-    if url:
-        return url
     host = os.getenv("DB_HOST", "localhost")
     port = os.getenv("DB_PORT", "3306")
-    name = os.getenv("DB_NAME", "permits")
+    name = os.getenv("DB_NAME", "permit_system")
     user = os.getenv("DB_USER", "root")
     password = os.getenv("DB_PASSWORD", "")
     return (
@@ -51,18 +51,20 @@ def _truthy(value: str | None) -> bool:
 
 
 def _connect_args() -> dict:
-    """TLS options for pymysql, enabled for a hosted database via ``DB_SSL``.
+    """TLS options for pymysql, enabled via ``DB_SSL`` for Aiven for MySQL.
 
-    Local development (``DB_SSL`` unset) connects without TLS, unchanged. On a
-    hosted MySQL, set ``DB_SSL=true`` to require an encrypted connection. The
-    server certificate is verified against the system CAs (or ``DB_SSL_CA`` if
-    the provider ships its own bundle); set ``DB_SSL_VERIFY=false`` only for a
-    provider that uses a self-signed certificate.
+    Local development (``DB_SSL`` unset) connects without TLS, unchanged. Aiven
+    requires an encrypted connection, so set ``DB_SSL=true`` there. Aiven ships
+    its own CA certificate: download ``ca.pem`` from the service overview and
+    point ``DB_SSL_CA`` at it so the server certificate is verified. Without a
+    CA file the connection is still encrypted but the certificate is not
+    verified (fine for a quick test, not for production).
     """
     if not _truthy(os.getenv("DB_SSL")):
         return {}
-    if _truthy(os.getenv("DB_SSL_VERIFY", "true")):
-        context = ssl.create_default_context(cafile=os.getenv("DB_SSL_CA"))
+    ca = os.getenv("DB_SSL_CA")
+    if ca:
+        context = ssl.create_default_context(cafile=ca)
     else:
         context = ssl.create_default_context()
         context.check_hostname = False
@@ -94,7 +96,8 @@ def admin_engine():
     least-privilege read-only user (``DB_USER``). Schema creation, seeding, and
     user management need write/DDL rights, so those scripts build a separate
     engine from ``DB_ADMIN_USER`` / ``DB_ADMIN_PASSWORD`` (falling back to the
-    app credentials when no admin override is configured).
+    app credentials when no admin override is configured). On Aiven the admin
+    user is ``avnadmin``.
     """
     user = os.getenv("DB_ADMIN_USER") or os.getenv("DB_USER", "root")
     password = os.getenv("DB_ADMIN_PASSWORD") or os.getenv("DB_PASSWORD", "")
