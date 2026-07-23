@@ -1,15 +1,25 @@
-"""PermitAgent — turns a question into a validated answer.
+"""PermitAgent — turns a question into a validated answer, two ways.
 
+Local (default):
     Streamlit -> PermitAgent -> `claude -p` (Claude Code) -> permit-db MCP
                                              -> QueryService -> SQLGuard -> MySQL
     Claude Code is the LLM, authenticated via the local Claude account
     (no API key). The CLI drives the query_permits MCP tool; this module parses
     its stream-json output for the SQL, rows+timing, and final answer.
 
-The generated SQL passes through the MCP server's SQL Guard before it touches
-the database.
+Cloud (no CLI, e.g. Streamlit Cloud):
+    Streamlit -> PermitAgent -> Anthropic API (ANTHROPIC_API_KEY) generates SQL
+                             -> execute_query (MCP tool) -> SQLGuard -> MySQL
+    Same guard, same audit — only the SQL *author* changes from the CLI to the
+    API. Requires the ``anthropic`` package and a key.
+
+The backend is chosen automatically at construction (see ``PermitAgent``). In
+both modes the generated SQL passes through the MCP server's SQL Guard before
+it touches the database.
 """
 import json
+import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -33,6 +43,11 @@ _ALLOWED_TOOLS = [_QUERY_TOOL]
 # per-question process cold-start is (see the persistent-session note in ask()).
 DEFAULT_MODEL = "sonnet"
 DEFAULT_TIMEOUT_S = 180
+
+# Model id for the Anthropic-API path (cloud / no-CLI mode).
+API_MODEL = "claude-sonnet-5"
+# Strip ```sql fences the model may add in API mode.
+_FENCE = re.compile(r"```(?:sql)?|```", re.IGNORECASE)
 
 
 @dataclass
@@ -141,14 +156,30 @@ def _cli_system(schema_text: str, id_hint: str = "") -> str:
     )
 
 
-class PermitAgent:
-    """Answers permit questions via the local Claude Code CLI.
+def _api_system(schema_text: str, id_hint: str = "") -> str:
+    """System prompt for the API path: the model returns raw SQL (no tools)."""
+    base, examples = _base_rules()
+    id_line = f"{id_hint}\n\n" if id_hint else ""
+    return (
+        f"{base}\n\n"
+        f"Schema (authoritative — use ONLY these names):\n{schema_text}\n\n"
+        f"{id_line}"
+        "Output ONLY one MySQL SELECT statement — no prose, no markdown "
+        "fences.\n\n"
+        f"Examples:\n{examples}"
+    )
 
-    At construction it looks for the ``claude`` CLI on PATH:
-      * ``cli``  — the CLI is available: Claude Code drives the permit-db MCP
-        tools. No API key.
-      * ``none`` — the CLI is not installed: every ``ask`` returns a clear
-        error.
+
+class PermitAgent:
+    """Answers permit questions via Claude.
+
+    Auto-selects a backend at construction:
+      * ``cli``  — the ``claude`` CLI is on PATH (local): Claude Code drives the
+        permit-db MCP tools. No API key.
+      * ``api``  — no CLI but ``ANTHROPIC_API_KEY`` is set (cloud/Streamlit):
+        the Anthropic API generates SQL, which still runs through the MCP
+        tool + SQL Guard.
+      * ``none`` — neither is available: every ``ask`` returns a clear error.
     """
 
     def __init__(self, model: str = DEFAULT_MODEL,
@@ -163,6 +194,9 @@ class PermitAgent:
         if self._cli:
             self.mode = "cli"
             self._system = _cli_system(schema, id_hint)
+        elif os.getenv("ANTHROPIC_API_KEY"):
+            self.mode = "api"
+            self._system = _api_system(schema, id_hint)
         else:
             self.mode = "none"
             self._system = ""
@@ -172,9 +206,12 @@ class PermitAgent:
         question = question.strip()
         if self.mode == "cli":
             return self._ask_cli(question)
+        if self.mode == "api":
+            return self._ask_api(question)
         return AgentResult(
             question, "", False, mode="none",
-            error="No agent available: install the `claude` CLI.",
+            error="No agent available: install the `claude` CLI (local) or set "
+            "ANTHROPIC_API_KEY (cloud).",
         )
 
     # -- CLI path (local) ------------------------------------------------- #
@@ -214,6 +251,67 @@ class PermitAgent:
                 error=f"claude exited {proc.returncode}: {detail}",
             )
         return self._parse(question, proc.stdout)
+
+    # -- API path (cloud) ------------------------------------------------- #
+    def _ask_api(self, question: str) -> AgentResult:
+        from app.mcp.tools import execute_query
+
+        try:
+            import anthropic
+        except ImportError:
+            return AgentResult(
+                question, "", False, mode="api",
+                error="The `anthropic` package is not installed.",
+            )
+        client = anthropic.Anthropic()
+
+        # 1. Question -> SQL
+        try:
+            msg = client.messages.create(
+                model=API_MODEL, max_tokens=500, system=self._system,
+                messages=[{"role": "user",
+                           "content": f"Question: {question}\nSQL:"}],
+            )
+            sql = _FENCE.sub(
+                "", "".join(b.text for b in msg.content if b.type == "text")
+            ).strip()
+        except Exception as exc:  # noqa: BLE001
+            return AgentResult(question, "", False, mode="api",
+                               error=f"SQL generation failed: {exc}")
+
+        # 2. Validated execution via the MCP tool (guard + audit + timing)
+        resp = execute_query(sql)
+        if not resp.get("success"):
+            return AgentResult(
+                question, sql, False, mode="api",
+                error=f"Query rejected: {resp.get('error')}",
+            )
+        rows = resp["data"]
+        elapsed = resp["execution_time_ms"]
+        sql = resp.get("generated_sql", sql)
+
+        # 3. Rows -> plain-English answer (best-effort)
+        try:
+            ans = client.messages.create(
+                model=API_MODEL, max_tokens=200,
+                system="Answer in one or two plain, factual sentences using "
+                "the results. Do not restate the SQL. If the result is a "
+                "single number, lead with it.",
+                messages=[{"role": "user", "content": (
+                    f"Question: {question}\nSQL: {sql}\n"
+                    f"Results (JSON, up to 20 rows): "
+                    f"{json.dumps(rows[:20], default=str)}\n"
+                    f"Total rows: {len(rows)}"
+                )}],
+            )
+            answer = "".join(
+                b.text for b in ans.content if b.type == "text"
+            ).strip()
+        except Exception:  # noqa: BLE001 — phrasing is best-effort
+            answer = f"Query returned {len(rows)} row(s)."
+
+        return AgentResult(question, sql, True, answer=answer, rows=rows,
+                           execution_time_ms=elapsed, mode="api")
 
     # -- parsing ---------------------------------------------------------- #
     def _parse(self, question: str, stdout: str) -> AgentResult:

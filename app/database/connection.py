@@ -1,17 +1,24 @@
 """Database engine/session setup.
 
-Configuration is read from the environment (``.env``) so the connection
-details never live in code. The individual ``DB_HOST`` / ``DB_PORT`` /
-``DB_NAME`` / ``DB_USER`` / ``DB_PASSWORD`` variables are assembled into a
-SQLAlchemy URL, each with a sane default so the URL is always valid (no
-``None:None`` parse crashes when nothing is set).
+Configuration is read from the environment so the same code runs locally (from
+``.env``) and on a host like Streamlit Cloud (where the UI bridges
+``st.secrets`` into the environment before this module is imported).
 
-Two supported targets:
-  * Local MySQL   — ``DB_HOST=localhost``, ``DB_PORT=3306``, ``DB_SSL`` unset
-    (plaintext connection).
-  * Aiven for MySQL — the service host, its assigned port, and ``DB_SSL=true``.
-    Aiven requires TLS and ships its own CA; point ``DB_SSL_CA`` at the
-    downloaded ``ca.pem`` so the server certificate is verified.
+Two ways to configure, in priority order:
+  1. ``DATABASE_URL`` — a full SQLAlchemy URL (easiest for a hosted service;
+     paste it straight from the provider). It is normalized: a bare
+     ``mysql://`` scheme becomes ``mysql+pymysql://`` (SQLAlchemy would
+     otherwise reach for the uninstalled ``MySQLdb`` driver), and a
+     provider ``ssl-mode`` query param is stripped (TLS is applied via
+     ``connect_args`` instead) while still switching TLS on.
+  2. ``DB_HOST`` / ``DB_PORT`` / ``DB_NAME`` / ``DB_USER`` / ``DB_PASSWORD`` —
+     assembled into a URL, each with a sane default so the URL is always
+     valid (no ``None:None`` parse crashes when nothing is set).
+
+Targets:
+  * Local MySQL     — ``DB_HOST=localhost``, ``DB_PORT=3306``, ``DB_SSL`` unset.
+  * Aiven for MySQL — the service host/port and ``DB_SSL=true`` (Aiven requires
+    TLS). To verify the server cert, download ``ca.pem`` and set ``DB_SSL_CA``.
 
 ``create_engine`` only parses the URL and sets up the pool; it does not open a
 connection, so importing this module never fails just because the database is
@@ -20,6 +27,7 @@ unreachable — that surfaces later, at query time, where it can be handled.
 import os
 import ssl
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
@@ -34,7 +42,45 @@ from sqlalchemy.orm import sessionmaker
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
+def _url_wants_tls(url: str | None) -> bool:
+    """True if a DATABASE_URL asks for TLS via an ``ssl-mode`` param.
+
+    Providers hand out URLs like ``...?ssl-mode=REQUIRED``. PyMySQL applies TLS
+    through ``connect_args`` (not the URL), so we detect the intent here and
+    turn TLS on even when ``DB_SSL`` was not set separately.
+    """
+    if not url:
+        return False
+    mode = dict(parse_qsl(urlsplit(url).query)).get("ssl-mode", "")
+    return mode.upper() not in ("", "DISABLED", "PREFERRED")
+
+
+def _normalize_url(url: str) -> str:
+    """Make a provider-supplied URL safe for SQLAlchemy + PyMySQL.
+
+    * ``mysql://`` -> ``mysql+pymysql://`` (a bare ``mysql://`` makes SQLAlchemy
+      import ``MySQLdb``/mysqlclient, which we do not ship).
+    * Drop the ``ssl-mode`` query param (a mysqlclient/libmysql option PyMySQL
+      rejects); TLS is applied via ``connect_args`` instead.
+    * Ensure ``charset=utf8mb4``.
+    """
+    parts = urlsplit(url)
+    scheme = "mysql+pymysql" if parts.scheme == "mysql" else parts.scheme
+    query = [
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+        if k.lower() != "ssl-mode"
+    ]
+    if not any(k == "charset" for k, _ in query):
+        query.append(("charset", "utf8mb4"))
+    return urlunsplit(
+        (scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )
+
+
 def _database_url() -> str:
+    url = os.getenv("DATABASE_URL")
+    if url:
+        return _normalize_url(url)
     host = os.getenv("DB_HOST", "localhost")
     port = os.getenv("DB_PORT", "3306")
     name = os.getenv("DB_NAME", "permit_system")
@@ -51,16 +97,16 @@ def _truthy(value: str | None) -> bool:
 
 
 def _connect_args() -> dict:
-    """TLS options for pymysql, enabled via ``DB_SSL`` for Aiven for MySQL.
+    """TLS options for pymysql, for a hosted database like Aiven for MySQL.
 
-    Local development (``DB_SSL`` unset) connects without TLS, unchanged. Aiven
-    requires an encrypted connection, so set ``DB_SSL=true`` there. Aiven ships
-    its own CA certificate: download ``ca.pem`` from the service overview and
-    point ``DB_SSL_CA`` at it so the server certificate is verified. Without a
-    CA file the connection is still encrypted but the certificate is not
-    verified (fine for a quick test, not for production).
+    Local development (``DB_SSL`` unset, no ``ssl-mode`` in ``DATABASE_URL``)
+    connects without TLS, unchanged. TLS turns on when ``DB_SSL=true`` OR the
+    ``DATABASE_URL`` carries an ``ssl-mode`` that requires it. With ``DB_SSL_CA``
+    set (path to the provider's ``ca.pem``) the server certificate is verified;
+    otherwise the connection is encrypted but the certificate is not verified
+    (matches Aiven's ``ssl-mode=REQUIRED``).
     """
-    if not _truthy(os.getenv("DB_SSL")):
+    if not (_truthy(os.getenv("DB_SSL")) or _url_wants_tls(os.getenv("DATABASE_URL"))):
         return {}
     ca = os.getenv("DB_SSL_CA")
     if ca:

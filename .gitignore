@@ -1,5 +1,6 @@
 # Environment / secrets
 .env
+.streamlit/secrets.toml
 
 # DB TLS certificates (e.g. Aiven ca.pem) — keep certs/README.md, ignore certs
 *.pem

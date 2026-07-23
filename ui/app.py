@@ -17,6 +17,7 @@ The UI never touches the database or repository directly.
 import csv
 import html as _html
 import io
+import os
 import re
 import sys
 from pathlib import Path
@@ -27,6 +28,17 @@ import streamlit as st
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+# Bridge Streamlit secrets -> environment BEFORE importing the backend, so the
+# database layer (which reads DB_* / DATABASE_URL from os.environ) and the API
+# agent (ANTHROPIC_API_KEY) pick up config when deployed to Streamlit Cloud.
+# Local runs have no secrets file, which is fine — the .env is used instead.
+try:
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:  # noqa: BLE001 — no secrets.toml locally is expected
+    pass
 
 import data  # noqa: E402  (ui/data.py — deterministic reads)
 from app.agent.agent import PermitAgent  # noqa: E402
@@ -384,6 +396,7 @@ with st.sidebar:
     agent_mode = get_agent().mode
     agent_label = {
         "cli": "Claude Code (CLI)",
+        "api": "Anthropic API",
         "none": "not configured",
     }[agent_mode]
     mcp_ok = (_ROOT / ".mcp.json").exists()
