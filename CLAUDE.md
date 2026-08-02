@@ -1,5 +1,9 @@
 # Permit Query Agent — instructions
 
+**Use the `permit-query-agent` subagent** (`.claude/agents/permit-query-agent.md`)
+for any request to look up, count, or summarize permit records — it already
+knows the schema-first workflow, join rules, and edge cases below.
+
 This project exposes a read-only SQL interface to a permit database over MCP
 (`permit-db` server). Two tools are available:
 
